@@ -66,3 +66,72 @@ try {
 }
 
 loadBtn.addEventListener("click", loadNotes);
+
+async function createNote(event) {
+event.preventDefault();
+
+const noteTitle = title.value.trim();
+const noteBody = body.value.trim();
+
+// Validate the title
+if (!noteTitle) {
+    status.textContent = "Please enter a title.";
+    title.focus();
+    return;
+}
+
+if (noteTitle.length > 100) {
+    status.textContent = "The title must not exceed 100 characters.";
+    title.focus();
+    return;
+}
+
+// Disable the submit button while the request runs
+submitBtn.disabled = true;
+status.textContent = "Creating note...";
+
+try {
+    const newNote = await request(API_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            title: noteTitle,
+            body: noteBody,
+            userId: 1
+        })
+    });
+
+    // Build the note safely using textContent
+    const item = document.createElement("li");
+    const noteHeading = document.createElement("h3");
+    const noteBodyElement = document.createElement("p");
+
+    noteHeading.textContent = newNote.title;
+    noteBodyElement.textContent = newNote.body;
+
+    item.append(noteHeading, noteBodyElement);
+
+    // Add the new note at the top of the list
+    notesList.prepend(item);
+
+    status.textContent =
+        `Note created (status 201, id ${newNote.id}).`;
+
+    // Clear the form after success
+    form.reset();
+} catch (error) {
+    status.textContent =
+        "Sorry, we couldn't create your note. Please try again.";
+
+    console.error("Error creating note:", error);
+} finally {
+    submitBtn.disabled = false;
+}
+
+}
+
+form.addEventListener("submit", createNote);
+loadBtn.addEventListener("click", loadNotes);
+
