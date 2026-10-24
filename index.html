@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Client</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="api.js" defer></script>
+</head>
+<body>
+    <header>
+        <h1>API Client</h1>
+        <p>Load and manage notes using an API.</p>
+    </header>
+
+
+<main>
+    <section>
+        <h2>Load Notes</h2>
+        <button id="load-btn" type="button">Load Notes</button>
+        <p id="status" role="status" aria-live="polite"></p>
+        <ul id="notes-list"></ul>
+    </section>
+
+    <section>
+        <h2>Create a Note</h2>
+    
+        <form id="note-form">
+            <label for="title-input">Enter a Title</label>
+            <br>
+            <input
+                id="title-input"
+                type="text"
+                placeholder="Title"
+                maxlength="100"
+                required
+            >
+            <br>
+
+            <label for="body-input">Enter the Note Body</label>
+            <br>
+            <textarea
+                id="body-input"
+                placeholder="Enter your body here"
+                name="body-input"
+            ></textarea>
+            <br>
+
+            <button type="submit" id="submit-btn">Create Note</button>
+        </form>
+    </section>
+</main>
+
+
+</body>
+</html>
