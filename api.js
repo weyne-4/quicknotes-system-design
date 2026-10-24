@@ -45,11 +45,20 @@ try {
         const item = document.createElement("li");
         const noteTitle = document.createElement("h3");
         const noteBody = document.createElement("p");
+        const deleteBtn = document.createElement("button");
+
 
         noteTitle.textContent = note.title;
         noteBody.textContent = note.body;
 
-        item.append(noteTitle, noteBody);
+        deleteBtn.textContent= "Delete";
+        deleteBtn.type = "button";
+
+        deleteBtn.addEventListener("click", () =>{
+            deleteNote(note.id, item, deleteBtn);
+        });
+
+        item.append(noteTitle, noteBody, deleteBtn);
         notesList.appendChild(item);
     });
 
@@ -104,14 +113,24 @@ try {
     });
 
     // Build the note safely using textContent
-    const item = document.createElement("li");
-    const noteHeading = document.createElement("h3");
-    const noteBodyElement = document.createElement("p");
+const item = document.createElement("li");
+const noteHeading = document.createElement("h3");
+const noteBodyElement = document.createElement("p");
+const deleteBtn = document.createElement("button");
 
-    noteHeading.textContent = newNote.title;
-    noteBodyElement.textContent = newNote.body;
+noteHeading.textContent = newNote.title;
+noteBodyElement.textContent = newNote.body;
 
-    item.append(noteHeading, noteBodyElement);
+deleteBtn.textContent = "Delete";
+deleteBtn.type = "button";
+
+deleteBtn.addEventListener("click", () => {
+deleteNote(newNote.id, item, deleteBtn);
+});
+
+item.append(noteHeading, noteBodyElement, deleteBtn);
+notesList.prepend(item);
+
 
     // Add the new note at the top of the list
     notesList.prepend(item);
@@ -131,7 +150,37 @@ try {
 }
 
 }
+async function deleteNote(noteId, noteElement, deleteBtn) {
+deleteBtn.disabled = true;
+status.textContent = "Deleting note...";
+
+
+try {
+    await request(`${API_URL}/${noteId}`, {
+        method: "DELETE"
+    });
+
+    // JSONPlaceholder simulates DELETE responses. It does not permanently
+    // store or delete notes, so remove the note from this page only after
+    // the API reports success. Reloading may bring server-provided notes back.
+    noteElement.remove();
+
+    status.textContent = `Note ${noteId} deleted successfully.`;
+} catch (error) {
+    status.textContent =
+        `Sorry, we couldn't delete note ${noteId}. Please try again.`;
+
+    console.error("Error deleting note:", error);
+} finally {
+    deleteBtn.disabled = false;
+}
+
+
+}
+
 
 form.addEventListener("submit", createNote);
 loadBtn.addEventListener("click", loadNotes);
+
+
 
