@@ -2,275 +2,430 @@
 
 ## 1. Overview
 
-The QuickNotes API will allow users to create, retrieve, update, and delete notes.
+QuickNotes is a note-taking application that allows users to create, retrieve, search, update, and delete notes. This document defines the proposed REST API, including its endpoints, request and response formats, success status codes, and error handling.
 
-This document describes the proposed REST API that the QuickNotes backend team should implement.
+The API uses HTTP methods to represent operations on resources and JSON to exchange data between the client and server.
 
-Unlike JSONPlaceholder, which is used for frontend testing, the real QuickNotes backend should persist notes in a database.
+**Base URL:** `/api`
 
-## 2. Base URL
+**Data format:** `application/json`
 
-text
-/api/notes
+**Authentication:** Production endpoints that access private user data require authentication.
 
-The deployed backend will provide the complete base URL. For example, the API could be hosted at:
+**Important:** This document describes the proposed QuickNotes API. The browser-based API client in this repository uses JSONPlaceholder as a demonstration service; JSONPlaceholder does not implement this complete QuickNotes API.
 
-text
-https://your-domain.example/api/notes
+## 2. REST Endpoints
 
-The example domain is a placeholder, not a deployed service.
+The following table describes the proposed endpoints.
 
-## 3. Note Data Structure
+| Method | Path                               | Description                                                                   | Success status   |
+| ------ | ---------------------------------- | ----------------------------------------------------------------------------- | ---------------- |
+| GET    | `/api/notes`                       | Retrieve the authenticated user's notes, with optional search and pagination. | `200 OK`         |
+| GET    | `/api/notes/{id}`                  | Retrieve a specific note owned by the authenticated user.                     | `200 OK`         |
+| POST   | `/api/notes`                       | Create a new note.                                                            | `201 Created`    |
+| PUT    | `/api/notes/{id}`                  | Replace the editable fields of an existing note.                              | `200 OK`         |
+| PATCH  | `/api/notes/{id}`                  | Update selected fields of an existing note.                                   | `200 OK`         |
+| DELETE | `/api/notes/{id}`                  | Delete a note owned by the authenticated user.                                | `204 No Content` |
+| GET    | `/api/notes/{id}/tags`             | Retrieve the tags assigned to a specific note.                                | `200 OK`         |
+| PUT    | `/api/notes/{noteId}/tags/{tagId}` | Assign an existing tag to a note.                                             | `204 No Content` |
+| DELETE | `/api/notes/{noteId}/tags/{tagId}` | Remove a tag assignment from a note.                                          | `204 No Content` |
 
-Each note contains:
+The `{id}`, `{noteId}`, and `{tagId}` values are path parameters representing resource identifiers.
 
-| Field       | Type    | Description                                 |
-| ----------- | ------- | ------------------------------------------- |
-| `id`        | Integer | Unique identifier assigned by the server    |
-| `title`     | String  | Required note title, maximum 100 characters |
-| `body`      | String  | Optional note content                       |
-| `userId`    | Integer | Identifier of the note's owner              |
-| `createdAt` | String  | Date and time the note was created          |
-| `updatedAt` | String  | Date and time the note was last updated     |
+The API must verify ownership and authorization before returning or modifying private resources.
 
-The server generates the note ID and timestamps.
+### 2.1 GET /api/notes
 
-## 4. Endpoint Table
+Retrieves the authenticated user's notes.
 
-| Method | Endpoint          | Description              | Success status |
-| ------ | ----------------- | ------------------------ | -------------- |
-| GET    | `/api/notes`      | Retrieve notes           | 200 OK         |
-| GET    | `/api/notes/{id}` | Retrieve one note by ID  | 200 OK         |
-| POST   | `/api/notes`      | Create a note            | 201 Created    |
-| PUT    | `/api/notes/{id}` | Replace an existing note | 200 OK         |
-| DELETE | `/api/notes/{id}` | Delete a note            | 204 No Content |
+Optional query parameters include:
 
-## 5. Request and Response Examples
+* `q` — searches relevant note text.
+* `page` — selects the page number.
+* `limit` — limits the number of notes returned per page.
 
-### 5.1 Retrieve All Notes
+Example request:
 
-**Request**
-
-http
-GET /api/notes
+```http
+GET /api/notes?q=study&page=1&limit=10
+Authorization: Bearer <access-token>
 Accept: application/json
+```
 
-**Successful response — 200 OK**
+Success status: `200 OK`.
 
-json
-[
-{
-"id": 1,
-"title": "Complete assignment",
-"body": "Finish the API client exercise.",
-"userId": 1,
-"createdAt": "2026-10-24T10:00:00Z",
-"updatedAt": "2026-10-24T10:00:00Z"
-},
-{
-"id": 2,
-"title": "Study JavaScript",
-"body": "Review async and await.",
-"userId": 1,
-"createdAt": "2026-10-24T11:00:00Z",
-"updatedAt": "2026-10-24T11:00:00Z"
-}
-]
+### 2.2 GET /api/notes/{id}
 
-If no notes exist, the API returns `200 OK` with an empty array:
+Retrieves one note by its identifier.
 
-json
-[]
+Example request:
 
-### 5.2 Retrieve One Note
-
-**Request**
-
-http
-GET /api/notes/1
+```http
+GET /api/notes/101
+Authorization: Bearer <access-token>
 Accept: application/json
+```
 
-**Successful response — 200 OK**
+Success status: `200 OK`.
 
-json
-{
-"id": 1,
-"title": "Complete assignment",
-"body": "Finish the API client exercise.",
-"userId": 1,
-"createdAt": "2026-10-24T10:00:00Z",
-"updatedAt": "2026-10-24T10:00:00Z"
-}
+If the note does not exist or is not available to the requesting user, the API should return an appropriate error without exposing another user's private information.
 
-### 5.3 Create a Note
+### 2.3 POST /api/notes
 
-**Request**
+Creates a new note.
 
-http
+Example request:
+
+```http
 POST /api/notes
+Authorization: Bearer <access-token>
 Content-Type: application/json
-
-Request body:
-
-json
-{
-"title": "Learn API development",
-"body": "Practise GET, POST, and DELETE.",
-"userId": 1
-}
-
-The title is required and must not exceed 100 characters. The body is optional.
-
-**Successful response — 201 Created**
-
-json
-{
-"id": 101,
-"title": "Learn API development",
-"body": "Practise GET, POST, and DELETE.",
-"userId": 1,
-"createdAt": "2026-10-24T12:00:00Z",
-"updatedAt": "2026-10-24T12:00:00Z"
-}
-
-The server assigns the new ID and timestamps and stores the note in the database.
-
-### 5.4 Update a Note
-
-**Request**
-
-http
-PUT /api/notes/1
-Content-Type: application/json
+Accept: application/json
+```
 
 Request body:
 
 ```json
 {
-  "title": "Complete API assignment",
-  "body": "Finish and test all API operations.",
-  "userId": 1
+  "title": "Study plan",
+  "body": "Review the system design notes.",
+  "category": "Study"
 }
+```
 
+The backend must validate the title, enforce the 100-character maximum, and determine the owner from the authenticated user rather than trusting a client-supplied owner ID.
 
-**Successful response — 200 OK**
+Success status: `201 Created`.
 
-..json
+### 2.4 PUT /api/notes/{id}
+
+Replaces the editable fields of an existing note.
+
+Example request:
+
+```http
+PUT /api/notes/101
+Authorization: Bearer <access-token>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
 {
-  "id": 1,
-  "title": "Complete API assignment",
-  "body": "Finish and test all API operations.",
-  "userId": 1,
-  "createdAt": "2026-10-24T10:00:00Z",
-  "updatedAt": "2026-10-24T13:00:00Z"
+  "title": "Updated study plan",
+  "body": "Review the API and database documentation.",
+  "category": "Study"
 }
+```
 
+Success status: `200 OK`.
 
-The server updates the existing note and its `updatedAt` timestamp.
+The endpoint should validate the request and verify the user's permission to modify the note.
 
-### 5.5 Delete a Note
+### 2.5 PATCH /api/notes/{id}
 
-**Request**
+Updates only the specified fields of an existing note.
 
-http
-DELETE /api/notes/1
+Example request:
 
+```http
+PATCH /api/notes/101
+Authorization: Bearer <access-token>
+Content-Type: application/json
+```
 
-**Successful response — 204 No Content**
+Request body:
 
-The server deletes the note from the database and returns an empty response body.
+```json
+{
+  "title": "Revised study plan"
+}
+```
 
-### 5.6 Retrieve Notes for a User
+Success status: `200 OK`.
 
-**Request**
+Fields not included in the request remain unchanged. The backend must reject invalid fields and validate any supplied values.
 
-http
-GET /api/notes?userId=1
+### 2.6 DELETE /api/notes/{id}
+
+Deletes an existing note.
+
+Example request:
+
+```http
+DELETE /api/notes/101
+Authorization: Bearer <access-token>
+```
+
+Success status: `204 No Content`.
+
+A successful deletion returns no response body.
+
+### 2.7 GET /api/notes/{id}/tags
+
+Retrieves the tags associated with a note.
+
+Example request:
+
+```http
+GET /api/notes/101/tags
+Authorization: Bearer <access-token>
 Accept: application/json
+```
 
+Example response:
 
-**Successful response — 200 OK**
+```json
+{
+  "data": [
+    {
+      "id": 5,
+      "name": "revision"
+    },
+    {
+      "id": 8,
+      "name": "urgent"
+    }
+  ]
+}
+```
 
-json
-[
-  {
-    "id": 2,
-    "title": "Study JavaScript",
-    "body": "Review async and await.",
-    "userId": 1,
-    "createdAt": "2026-10-24T11:00:00Z",
-    "updatedAt": "2026-10-24T11:00:00Z"
+Success status: `200 OK`.
+
+The backend must check that the requesting user is authorized to access the note and its tags.
+
+### 2.8 PUT /api/notes/{noteId}/tags/{tagId}
+
+Assigns an existing tag to a note.
+
+Example request:
+
+```http
+PUT /api/notes/101/tags/5
+Authorization: Bearer <access-token>
+```
+
+Success status: `204 No Content`.
+
+The backend must verify that the note and tag belong to the same user. The operation should avoid creating duplicate note-tag associations.
+
+### 2.9 DELETE /api/notes/{noteId}/tags/{tagId}
+
+Removes a tag assignment without deleting the note or the tag itself.
+
+Example request:
+
+```http
+DELETE /api/notes/101/tags/5
+Authorization: Bearer <access-token>
+```
+
+Success status: `204 No Content`.
+
+The backend removes the corresponding association from the `note_tags` table.
+
+## 3. Request and Response Examples
+
+### 3.1 Create a Note
+
+**Request**
+
+```http
+POST /api/notes
+Authorization: Bearer <access-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "title": "Assignment",
+  "body": "Complete the QuickNotes API design.",
+  "category": "Study"
+}
+```
+
+**Successful response**
+
+HTTP status: `201 Created`
+
+```json
+{
+  "id": 101,
+  "title": "Assignment",
+  "body": "Complete the QuickNotes API design.",
+  "category": "Study",
+  "created_at": "2026-10-26T09:00:00Z",
+  "updated_at": "2026-10-26T09:00:00Z"
+}
+```
+
+The server generates the note identifier and timestamps. The owner is derived from the authenticated user's identity.
+
+### 3.2 List Notes
+
+**Request**
+
+```http
+GET /api/notes?page=1&limit=10
+Authorization: Bearer <access-token>
+Accept: application/json
+```
+
+**Successful response**
+
+HTTP status: `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": 101,
+      "title": "Assignment",
+      "body": "Complete the QuickNotes API design.",
+      "category": "Study",
+      "created_at": "2026-10-26T09:00:00Z",
+      "updated_at": "2026-10-26T09:00:00Z"
+    },
+    {
+      "id": 102,
+      "title": "Meeting",
+      "body": "Prepare the project presentation.",
+      "category": "Work",
+      "created_at": "2026-10-25T10:00:00Z",
+      "updated_at": "2026-10-25T12:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 2
   }
-]
+}
+```
 
+The `data` property contains the notes returned for the requested page. The `pagination` object describes the current page, page size, and total number of matching notes.
 
-The API returns notes belonging to the specified user. An empty array is returned when the user has no notes.
+When no notes match the request, the API can return `200 OK` with an empty `data` array.
 
-## 6. Error Handling
+## 4. Error Status Codes
 
-The API should return an appropriate HTTP status code and a JSON error response when a request fails.
+The API returns suitable HTTP error status codes when a request cannot be completed.
 
-### 6.1 Error Response Format
+| Status code | Name                  | Meaning                                                                   | Example situation                                              |
+| ----------- | --------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `400`       | Bad Request           | The request is malformed or contains invalid data.                        | The title is empty or exceeds 100 characters.                  |
+| `401`       | Unauthorized          | Authentication is missing or invalid.                                     | The access token is missing or expired.                        |
+| `403`       | Forbidden             | The authenticated user is not allowed to perform the requested operation. | A user attempts an operation on a resource they cannot access. |
+| `404`       | Not Found             | The requested resource does not exist or is not available to the user.    | A note identifier does not match an accessible note.           |
+| `409`       | Conflict              | The request conflicts with an existing resource or state.                 | A tag name conflicts with a uniqueness constraint.             |
+| `500`       | Internal Server Error | An unexpected server-side error occurred.                                 | An unhandled application or database failure occurs.           |
 
-json
+The backend must avoid returning internal stack traces, database credentials, or other sensitive implementation details to clients.
+
+### 4.1 Example Error Response
+
+Example: the client submits a note with a title that exceeds the allowed maximum.
+
+HTTP status: `400 Bad Request`
+
+```json
 {
   "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "The title is required."
+    "code": "INVALID_TITLE",
+    "message": "The title must contain between 1 and 100 characters."
   }
 }
+```
 
+The response uses a consistent structure so the frontend can identify the error and display a useful message.
 
-### 6.2 HTTP Error Codes
+### 4.2 Other Example Errors
 
-| Status code               | Meaning                                               | Example                                              |
-| ------------------------- | ----------------------------------------------------- | ---------------------------------------------------- |
-| 400 Bad Request           | The request contains invalid data                     | Missing title or title longer than 100 characters    |
-| 401 Unauthorized          | Authentication is required or invalid                 | Missing or invalid authentication credentials        |
-| 403 Forbidden             | The user is not permitted to perform the operation    | Attempting to delete another user's note             |
-| 404 Not Found             | The requested note does not exist                     | Requesting `/api/notes/9999`                         |
-| 409 Conflict              | The request conflicts with the current resource state | A conflicting operation, if supported by the backend |
-| 500 Internal Server Error | An unexpected server-side failure occurred            | An unhandled application error                       |
+**Missing or invalid authentication — `401 Unauthorized`**
 
-The backend should return clear error messages without exposing database credentials, stack traces, or other sensitive implementation details.
+```json
+{
+  "error": {
+    "code": "UNAUTHENTICATED",
+    "message": "Authentication is required."
+  }
+}
+```
 
-## 7. Validation Rules
+**Insufficient permission — `403 Forbidden`**
 
-The backend must validate incoming data even if the frontend also validates it.
+```json
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "You are not allowed to perform this operation."
+  }
+}
+```
 
-* The title is required.
-* The title must be a string containing between 1 and 100 characters after trimming whitespace.
-* The body is optional and must be a string when provided.
-* The `userId` must identify a valid user.
-* The note ID must be valid for operations on an existing note.
-* A request to update or delete a nonexistent note must return `404 Not Found`.
+**Resource not found — `404 Not Found`**
 
-## 8. Data Persistence
+```json
+{
+  "error": {
+    "code": "NOTE_NOT_FOUND",
+    "message": "The requested note was not found."
+  }
+}
+```
 
-Unlike JSONPlaceholder, the real QuickNotes backend must persist created notes in a database.
+**Unexpected server error — `500 Internal Server Error`**
 
-* Creating a note stores it and assigns a unique ID.
-* Retrieving notes reads the saved records.
-* Updating a note changes the stored record.
-* Deleting a note removes the stored record.
-* Changes must remain available after the application or server restarts.
+```json
+{
+  "error": {
+    "code": "INTERNAL_ERROR",
+    "message": "An unexpected error occurred. Please try again later."
+  }
+}
+```
 
-## 9. Frontend Integration
+These error codes and messages describe the proposed API contract. The implementation should return errors that match the actual failure and must not expose private information.
 
-The frontend should communicate with the real backend through HTTP requests.
+## 5. Validation Rules
 
-It should:
+The backend should enforce the following rules:
 
-* Show a loading message while requests are running.
-* Display success messages after successful operations.
-* Display friendly errors when requests fail.
-* Disable relevant buttons while requests are in progress.
-* Use `textContent` when inserting note text into the page.
-* Validate the title before submitting a create request.
-* Update the displayed notes after successful create, update, and delete operations.
+1. The note title is required.
+2. The title must not exceed 100 characters.
+3. Input values must have the expected data types.
+4. Required fields must not be silently accepted when absent.
+5. Resource identifiers must be valid.
+6. Users must be authenticated before accessing private notes.
+7. Users must only modify notes and tags they are authorized to access.
+8. Database operations must use parameterized queries.
+9. Unexpected errors must not disclose internal implementation details.
+10. Pagination parameters must be validated and restricted to reasonable values.
 
-## 10. Scope
+Frontend validation improves usability but does not replace backend validation.
 
-This document defines the proposed API contract. It does not implement the backend, database, authentication, or deployment.
+## 6. HTTP Method and Status Code Summary
 
-The frontend and backend teams should agree on the contract before implementing the production API.
+| Operation                 | Expected status             | Explanation                                            |
+| ------------------------- | --------------------------- | ------------------------------------------------------ |
+| Retrieve notes            | `200 OK`                    | The notes were retrieved successfully.                 |
+| Retrieve one note         | `200 OK`                    | The requested note was retrieved successfully.         |
+| Create a note             | `201 Created`               | A new note was created successfully.                   |
+| Replace a note            | `200 OK`                    | The note was updated successfully.                     |
+| Partially update a note   | `200 OK`                    | The selected fields were updated successfully.         |
+| Delete a note             | `204 No Content`            | The note was deleted successfully.                     |
+| Invalid request           | `400 Bad Request`           | The request failed validation.                         |
+| Missing authentication    | `401 Unauthorized`          | Valid authentication is required.                      |
+| Insufficient permission   | `403 Forbidden`             | The action is not permitted.                           |
+| Missing resource          | `404 Not Found`             | The resource could not be found or accessed.           |
+| Conflicting operation     | `409 Conflict`              | The request conflicts with the current resource state. |
+| Unexpected server failure | `500 Internal Server Error` | The server could not complete the operation.           |
+
+## 7. Conclusion
+
+The QuickNotes API uses REST-style endpoints and JSON messages to provide consistent note management operations.
+
+The design defines endpoints for retrieving, creating, updating, deleting, and tagging notes. It also specifies validation rules, success responses, error status codes, and example request and response bodies.
+
+Authentication, authorization, server-side validation, and parameterized database queries are essential for protecting users' private notes. The proposed API contract should be kept consistent with the backend implementation as the project develops.
