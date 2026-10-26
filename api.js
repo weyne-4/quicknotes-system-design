@@ -181,6 +181,3 @@ try {
 
 form.addEventListener("submit", createNote);
 loadBtn.addEventListener("click", loadNotes);
-
-
-
