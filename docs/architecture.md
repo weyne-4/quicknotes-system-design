@@ -2,436 +2,501 @@
 
 ## 1. Overview
 
-QuickNotes is a web application that allows users to create, view, search, update, and delete notes. This document describes the proposed system architecture, functional and non-functional requirements, capacity estimates, component responsibilities, request flows, architectural trade-offs, and potential single points of failure.
+QuickNotes is a notes application designed to let users create, view, search, update, and delete notes. This document describes a proposed architecture that can support growth from a small application to a service serving one million registered users.
 
-The architecture is a proposed design for the application. Deployment details and performance figures are estimates rather than measured production results.
+The design separates the client, application servers, caching, database storage, and background processing. It also explains expected workload, request flows, architectural trade-offs, and measures to reduce single points of failure.
+
+**Important:** This is a proposed design. The capacity estimates are based on explicit assumptions and have not been established through production measurements or load testing.
 
 ## 2. Requirements
 
 ### 2.1 Functional Requirements
 
-The system must allow users to:
+The system should:
 
-1. Create a note with a title, body, and category.
-2. View their saved notes.
-3. Search notes by text.
-4. Update an existing note.
-5. Delete a note.
-6. Organize notes into categories.
-7. Receive clear feedback when an operation succeeds or fails.
-
-If authentication is implemented, users must only be able to access notes they are authorized to view or modify.
+1. Allow users to create notes with a title, body, and category.
+2. Allow users to retrieve, search, update, and delete notes.
+3. Store notes persistently in a database.
+4. Return JSON responses through a REST-style API.
+5. Validate incoming requests and return useful error messages.
+6. Authenticate users and restrict access to their own private notes.
+7. Support pagination when users have many notes.
+8. Perform non-critical background tasks, such as analytics or search indexing, through a queue and worker.
 
 ### 2.2 Non-Functional Requirements
 
-* **Usability:** The interface should be simple and responsive on desktop and mobile devices.
-* **Performance:** Common operations should return results quickly under normal load.
-* **Reliability:** The application should handle temporary errors without losing previously saved data.
-* **Security:** Inputs must be validated, database queries must be protected against injection, and access controls must be enforced.
-* **Maintainability:** The frontend, backend, and data-storage responsibilities should be separated.
-* **Data integrity:** Notes should be stored persistently and changes should be handled consistently.
-* **Scalability:** The architecture should support additional users and features as demand grows.
+**Performance:** Common API requests should return quickly under normal operating conditions.
 
-## 3. High-Level Architecture
+**Scalability:** Application capacity should be expandable by adding application servers and increasing database capacity.
 
-The proposed architecture uses a web frontend, a backend API, and a relational database.
+**Availability:** Failure of one application server should not make the entire API unavailable.
+
+**Reliability:** The system should use persistent storage, backups, health checks, and recovery procedures to protect data and service availability.
+
+**Security:** Communication should use HTTPS, sensitive operations should require authorization, and the backend should validate input.
+
+**Consistency:** A successfully created note should be stored in the primary database. The system must account for potential replication lag when reading from a replica.
+
+**Maintainability:** The client, backend, database, and background processing should have clearly defined responsibilities.
+
+**Observability:** Logs, metrics, and alerts should help operators identify errors, slow requests, and component failures.
+
+## 3. High-Level Architecture Diagram
 
 ```text
-                  +----------------------+
-                  |        User          |
-                  +----------+-----------+
-                             |
-                             v
-                  +----------------------+
-                  |   Web Browser        |
-                  | HTML, CSS, JavaScript|
-                  +----------+-----------+
-                             |
-                      HTTPS / REST
-                             |
-                             v
-                  +----------------------+
-                  |   Backend API        |
-                  | Validation           |
-                  | Business Logic       |
-                  | Authentication       |
-                  | Authorization        |
-                  +----------+-----------+
-                             |
-                         SQL Queries
-                             |
-                             v
-                  +----------------------+
-                  | Relational Database  |
-                  | Users                |
-                  | Notes                |
-                  | Categories           |
-                  | Tags                 |
-                  +----------------------+
+                        +----------------------+
+                        |   Client / Browser   |
+                        +----------+-----------+
+                                   |
+                             DNS resolution
+                                   |
+                        +----------v-----------+
+                        |    Redundant DNS     |
+                        +-----+-----------+----+
+                              |           |
+                    Static assets       API requests
+                              |           |
+                     +--------v---+   +---v----------------+
+                     |    CDN     |   | Load Balancer      |
+                     | Cached web |   | Health checks      |
+                     | assets     |   +---+------------+---+
+                     +-----+------+       |            |
+                           |          +---v----+   +---v----+
+                           +--------->| App A  |   | App B  |
+                       Static assets  | Server |   | Server |
+                                      +---+----+   +----+---+
+                                          |             |
+                                          +------+------+
+                                                 |
+                                    +------------+------------+
+                                    |                         |
+                              +-----v------+            +-----v------+
+                              | Cache      |            | Primary DB |
+                              | Cluster    |<-----------| Read/write |
+                              +------------+            +-----+------+
+                                                             |
+                                                       Replication
+                                                             |
+                                                       +-----v------+
+                                                       | Read       |
+                                                       | Replica    |
+                                                       +------------+
+
+                     Background processing:
+
+                     App Servers
+                          |
+                          v
+                    +-----------+
+                    | Durable   |
+                    | Queue     |
+                    +-----+-----+
+                          |
+                          v
+                    +-----------+
+                    | Worker    |
+                    | Pool      |
+                    +-----+-----+
+                          |
+                          v
+                    Background tasks
+              (analytics, notifications, indexing)
 ```
 
-### Architecture Flow
+### Diagram Explanation
 
-1. The user interacts with the web interface.
-2. The frontend sends an HTTP request to the backend API.
-3. The backend validates the request and checks authorization where applicable.
-4. The backend executes the required business logic.
-5. The backend reads or modifies data in the relational database.
-6. The backend returns an HTTP response.
-7. The frontend updates the interface based on the result.
+* The client uses DNS to find the application's network address.
+* The CDN serves static frontend assets without requiring every request to reach an application server.
+* API requests pass through the load balancer, which distributes them among healthy application servers.
+* Application servers use the cache to reduce repeated database reads.
+* The primary database handles writes and reads requiring the latest committed data.
+* The read replica handles suitable read-heavy workloads and receives replicated data from the primary.
+* Background jobs are placed in a durable queue and processed by workers independently of the main request flow.
 
-The frontend must not connect directly to the production database. Database credentials and privileged operations must remain on the backend.
+The API should not be cached publicly by the CDN when doing so could expose private notes. The CDN primarily handles static assets; authenticated API responses require suitable private caching rules.
 
 ## 4. Component Explanations
 
-### 4.1 Web Frontend
+### 4.1 Client
 
-**Responsibilities:**
+The client is the user's browser or mobile application, which displays notes and sends API requests.
 
-* Display the user interface.
-* Collect note titles, bodies, and categories.
-* Send requests to the backend API.
-* Display saved notes and search results.
-* Show loading indicators, validation messages, and errors.
+**Problem solved:** It provides the interface through which users interact with the service.
 
-**Suggested technologies:** HTML, CSS, and JavaScript.
+### 4.2 DNS
 
-The frontend should provide immediate feedback where appropriate, but the backend remains responsible for enforcing validation and authorization.
+DNS resolves the application's domain name to the appropriate network endpoint.
 
-### 4.2 Backend API
+**Problem solved:** It allows users and applications to reach the service using a domain name rather than a hard-coded IP address.
 
-**Responsibilities:**
+### 4.3 Content Delivery Network (CDN)
 
-* Expose endpoints for note operations.
-* Validate incoming data.
-* Authenticate users if accounts are supported.
-* Enforce authorization before accessing user-specific notes.
-* Apply business rules.
-* Communicate with the database.
-* Return appropriate HTTP status codes and JSON responses.
+The CDN caches and serves static frontend assets, such as CSS, JavaScript, and images, from geographically distributed locations.
 
-**Suggested technology:** A backend framework such as FastAPI or Express.js.
+**Problem solved:** It reduces static-content delivery latency and decreases traffic reaching the origin infrastructure.
 
-Keeping business logic in the backend makes it easier to maintain consistent rules across different clients.
+### 4.4 Load Balancer
 
-### 4.3 Relational Database
+The load balancer distributes incoming API requests among healthy application servers and stops sending traffic to instances that fail health checks.
 
-**Responsibilities:**
+**Problem solved:** It avoids dependence on one application server and distributes requests across available capacity.
 
-* Store users, notes, categories, and tags.
-* Maintain relationships between records.
-* Enforce primary-key and foreign-key constraints.
-* Support searching and retrieving notes.
-* Preserve data between application sessions.
+### 4.5 Application Servers
 
-**Suggested technology:** SQLite for a small local deployment or PostgreSQL for a multi-user deployment.
+At least two application-server instances run the backend API, validate requests, enforce business rules, authorize access, and communicate with the database and other services.
 
-Database selection should depend on expected concurrency, deployment requirements, and operational needs.
+**Problem solved:** Multiple instances improve resilience and allow capacity to increase without requiring a single increasingly powerful server.
 
-### 4.4 API Communication
+### 4.6 Cache
 
-The frontend and backend communicate through REST-style HTTP endpoints using JSON.
+A replicated cache cluster stores suitable frequently accessed data, such as recent note-query results, with an expiration policy.
 
-Proposed endpoints include:
+**Problem solved:** It reduces repeated database queries and helps improve response times for cacheable reads.
 
-| Method | Endpoint          | Purpose           |
-| ------ | ----------------- | ----------------- |
-| GET    | `/api/notes`      | Retrieve notes    |
-| GET    | `/api/notes/{id}` | Retrieve one note |
-| POST   | `/api/notes`      | Create a note     |
-| PUT    | `/api/notes/{id}` | Update a note     |
-| DELETE | `/api/notes/{id}` | Delete a note     |
+Cache keys must include the relevant user identity, search terms, and pagination parameters so that one user cannot receive another user's private notes.
 
-These endpoints describe the proposed production API. They do not imply that the backend has already been implemented.
+### 4.7 Primary Database
 
-## 5. Capacity Estimates
+The primary relational database stores authoritative application data, including notes and associated records, and handles writes.
 
-The following figures are illustrative planning assumptions for a small notes application. They are not measured traffic or performance data.
+**Problem solved:** It provides persistent storage and transactional operations that maintain data integrity.
 
-### 5.1 Initial Assumptions
+### 4.8 Read Replica
 
-| Metric                                   | Assumption |
-| ---------------------------------------- | ---------: |
-| Registered users                         |      1,000 |
-| Daily active users                       |        200 |
-| Notes per active user                    |         50 |
-| Average note text size                   |       2 KB |
-| Average requests per active user per day |         20 |
+The read replica receives replicated database changes and handles suitable read-heavy requests that can tolerate replication lag.
 
-### 5.2 Estimated Number of Notes
+**Problem solved:** It offloads eligible read traffic from the primary database.
 
-Assuming each of the 1,000 registered users stores 50 notes:
+A read replica does not automatically eliminate the primary database's single point of failure; a configured and tested failover process is also required.
 
-Total notes = 1,000 × 50
+### 4.9 Durable Queue
 
-**Estimated total: 50,000 notes**
+The queue stores background jobs so they can be processed asynchronously and retried when temporary failures occur.
 
-### 5.3 Estimated Note Storage
+**Problem solved:** It separates non-critical background work from the main API request path.
 
-Assuming each note requires approximately 2 KB for its text fields:
+The queue should use durable, replicated storage and an appropriate job-retention policy.
 
-50,000 × 2 KB = 100,000 KB
+### 4.10 Worker Pool
 
-This is approximately **100 MB using decimal units**.
+Multiple worker instances consume queued jobs and perform tasks such as analytics, notifications, or updating a search index.
 
-This estimate excludes database indexes, row metadata, user records, tags, backups, logs, and database overhead. Actual storage requirements will be higher.
+**Problem solved:** Workers prevent non-critical processing from unnecessarily delaying user-facing API responses.
 
-### 5.4 Estimated Daily Requests
+Jobs should be processed idempotently where possible, because retries can result in a job being delivered more than once.
 
-Assuming 200 daily active users each make 20 requests:
+## 5. Load Estimates for One Million Users
 
-200 × 20 = 4,000 requests per day.
+The following figures are planning assumptions rather than measured traffic. Actual resource requirements depend on user behavior, note sizes, query complexity, and peak concurrency.
 
-If requests were distributed evenly across 24 hours:
+### 5.1 Assumptions
 
-4,000 ÷ 86,400 ≈ 0.046 requests per second.
+| Metric                         |              Assumption |
+| ------------------------------ | ----------------------: |
+| Registered users               |               1,000,000 |
+| Daily active users             | 10% of registered users |
+| Daily active users, calculated |                 100,000 |
+| Reads per active user per day  |                      20 |
+| Writes per active user per day |                       2 |
+| Average note payload           |                    2 KB |
+| Peak-to-average traffic factor |                       5 |
 
-Real traffic will not be evenly distributed. Peak traffic could be considerably higher, so load testing would be necessary before making capacity commitments.
+For a conservative, easy-to-audit storage estimate, the model assumes that each write creates a new stored note of approximately 2 KB. Updates to existing notes may consume less additional storage than this model assumes, while attachments or larger notes would consume more.
 
-### 5.5 Scaling Strategy
+### 5.2 Reads per Second
 
-For the initial version, a single backend service and a relational database should be sufficient for the assumed workload, subject to testing.
+Daily reads:
 
-If demand grows, possible improvements include:
+100,000 active users × 20 reads per user = **2,000,000 reads per day**
 
-* Adding database indexes for frequently searched fields.
-* Optimizing SQL queries and pagination.
-* Increasing backend resources.
-* Running multiple backend instances behind a load balancer.
-* Introducing caching for suitable read-heavy operations.
-* Adding database replication and tested backup procedures.
+Average reads per second:
 
-Scaling should be guided by monitoring and measured bottlenecks rather than assumptions alone.
+2,000,000 ÷ 86,400 = **23.15 reads per second**
 
-## 6. Request Flows
+Estimated peak reads per second:
 
-### 6.1 Creating a Note
+23.15 × 5 = **115.74 reads per second**
 
-1. The user enters a title, body, and category.
-2. The frontend validates required fields for immediate feedback.
-3. The frontend sends a `POST /api/notes` request containing JSON.
-4. The backend validates the request again.
-5. The backend authenticates the user and checks authorization when accounts are supported.
-6. The backend inserts the note into the database.
-7. The backend returns the created note and an appropriate response, normally HTTP `201 Created`.
-8. The frontend displays the new note.
+The rounded planning estimate is approximately **116 reads per second at peak**.
 
-If validation fails, the backend should return an appropriate client-error response without saving invalid data.
+### 5.3 Writes per Second
 
-### 6.2 Retrieving Notes
+Daily writes:
 
-1. The user opens the notes page or requests a refresh.
-2. The frontend sends `GET /api/notes`.
-3. The backend determines which notes the user is permitted to access.
-4. The backend queries the database.
-5. The backend returns a JSON collection.
-6. The frontend renders the notes.
+100,000 active users × 2 writes per user = **200,000 writes per day**
 
-For large collections, the API should support pagination to avoid returning every note in a single response.
+Average writes per second:
 
-### 6.3 Searching Notes
+200,000 ÷ 86,400 = **2.31 writes per second**
 
-1. The user enters a search term.
-2. The frontend sends the term to the backend, for example through `GET /api/notes?q=meeting`.
-3. The backend validates the query and applies the user's access restrictions.
-4. The database searches the relevant fields.
-5. The backend returns matching notes.
-6. The frontend displays the results or a message indicating that no matches were found.
+Estimated peak writes per second:
 
-The backend should use parameterized queries rather than building SQL statements through unsafe string concatenation.
+2.31 × 5 = **11.57 writes per second**
 
-### 6.4 Updating a Note
+The rounded planning estimate is approximately **12 writes per second at peak**.
 
-1. The user edits an existing note.
-2. The frontend sends a `PUT /api/notes/{id}` request with the updated fields.
-3. The backend validates the data and checks authorization.
-4. The database updates the relevant record.
-5. The backend returns the updated note.
-6. The frontend displays the updated information.
+These estimates count API reads and writes, not cache hits as database reads. Actual database traffic depends on the cache hit rate and the distribution of reads across database replicas.
 
-If the note does not exist, the API should return an appropriate response, such as HTTP `404 Not Found`.
+### 5.4 Storage Growth per Year
 
-### 6.5 Deleting a Note
+Assumed new notes per year:
 
-1. The user chooses to delete a note.
-2. The frontend may ask the user to confirm the action.
-3. The frontend sends `DELETE /api/notes/{id}`.
-4. The backend checks authorization and confirms that the operation is valid.
-5. The database deletes the note or marks it as deleted if a soft-delete design is chosen.
-6. The backend returns a successful response, commonly HTTP `204 No Content`.
-7. The frontend removes the note from the displayed list.
+200,000 notes per day × 365 days = **73,000,000 notes per year**
 
-The frontend should only treat the deletion as successful after receiving a successful response.
+Raw note storage:
 
-## 7. Architectural Trade-Offs
+73,000,000 notes × 2 KB = 146,000,000 KB per year.
 
-### 7.1 Monolithic Backend vs. Microservices
+Using decimal units, this is approximately **146 GB of new note payload per year**.
 
-**Initial choice: Monolithic backend**
+Allowing an additional 30% for estimated database metadata and indexes:
 
-Advantages:
+146 GB × 1.30 = **189.8 GB per year**
 
-* Easier to develop and understand.
-* Lower deployment and infrastructure complexity.
-* Simpler local testing and debugging.
-* Suitable for a small application.
+The planning estimate is therefore approximately **190 GB of additional primary-database storage per year**.
 
-Disadvantages:
+This estimate excludes separately stored attachments, logs, backups, and the extra storage used by a read replica. Replication and backups will increase the overall infrastructure storage requirement.
 
-* Components cannot be deployed independently.
-* A failure in the backend may affect all API operations.
-* The application may require more careful modularization as it grows.
+### 5.5 Capacity Planning
 
-Microservices may become useful if the application develops substantially different workloads or independent scaling requirements. They would add network communication, deployment, monitoring, and data-consistency complexity.
+These estimates are starting points, not performance guarantees. Before production deployment, the system should be load-tested with representative note sizes, queries, authentication checks, and read/write patterns.
 
-### 7.2 Relational Database vs. NoSQL
+Monitoring should track API latency, error rates, cache hit rate, database utilization, queue depth, and worker processing time. Scaling decisions should follow measured bottlenecks.
 
-**Initial choice: Relational database**
+## 6. Request Flow: GET /notes
 
-Advantages:
+The `GET /notes` endpoint retrieves the notes that the requesting user is authorized to view.
 
-* Supports structured data and relationships.
-* Provides transactions and integrity constraints.
-* Supports queries across notes, users, and categories.
-* Fits the application's expected data model.
+1. The client sends `GET /notes` over HTTPS.
+2. DNS resolves the API hostname to the API entry point.
+3. The load balancer forwards the request to a healthy application server.
+4. The application server authenticates the request and checks the user's permissions.
+5. The application server checks the cache using a key that includes the user identity and any relevant query or pagination parameters.
+6. If a valid cache entry exists, the server returns the cached results.
+7. If there is a cache miss, the server queries the read replica when replica data is sufficiently current for the operation.
+8. If the replica is unavailable, the backend can use the primary database, subject to capacity and operational policies.
+9. The application server returns a JSON response to the client and caches eligible results for a limited period.
+10. The client displays the retrieved notes.
 
-Disadvantages:
+If the result depends on the latest write, the backend should read from the primary or otherwise use a consistency mechanism that prevents stale results from violating the application's requirements.
 
-* Schema changes may require migrations.
-* Scaling some workloads horizontally can require additional planning.
+Pagination should be used for large collections so the server does not return every note in one response.
 
-A NoSQL database could be considered if future requirements demand a different data model or access pattern. It is not automatically better for a notes application.
+**Example success response:**
 
-### 7.3 Single Backend Instance vs. Multiple Instances
+```json
+{
+  "data": [
+    {
+      "id": 101,
+      "title": "Study plan",
+      "body": "Review the system design notes."
+    }
+  ],
+  "page": 1,
+  "limit": 10
+}
+```
 
-**Initial choice: One backend instance for the initial deployment**
+The response format is illustrative and should match the actual API contract.
 
-Advantages:
+## 7. Request Flow: POST /notes
 
-* Simple deployment.
-* Low initial infrastructure cost.
-* Easier debugging.
+The `POST /notes` endpoint creates a new note.
 
-Disadvantages:
+1. The client sends a `POST /notes` request containing the note's title, body, and category where supported.
+2. DNS resolves the API hostname.
+3. The load balancer forwards the request to a healthy application server.
+4. The application server authenticates the user and validates the request. For example, the title must not be empty and must not exceed 100 characters.
+5. The backend checks authorization and applies business rules.
+6. The application server inserts the note into the primary database within a transaction.
+7. After the database confirms the write, the application invalidates or updates affected cache entries.
+8. The application schedules non-critical background work through the durable queue, such as updating a search index or recording analytics.
+9. The backend returns `201 Created` with the new note's details.
+10. The client displays the new note.
 
-* The backend is a potential single point of failure.
-* Maintenance or a process crash can make the API unavailable.
-* Capacity is limited to the resources of that instance.
+For reliable background processing, a transactional outbox or another reliable publication mechanism can prevent a committed database write from being silently lost when queue publication fails. Failed jobs should be retried and eventually moved to a dead-letter queue if they cannot be processed.
 
-For higher availability, multiple instances can run behind a load balancer. The application must also handle shared sessions and other state consistently.
+The API should not report a successful note creation until the database write has succeeded.
 
-### 7.4 Caching vs. Direct Database Reads
+**Example request body:**
 
-**Initial choice: Direct database reads**
+```json
+{
+  "title": "Study plan",
+  "body": "Review the system design notes.",
+  "category": "Study"
+}
+```
 
-Advantages:
+**Example success response:**
 
-* Simpler implementation.
-* Fewer consistency problems.
-* No separate cache infrastructure.
+```json
+{
+  "id": 101,
+  "title": "Study plan",
+  "body": "Review the system design notes.",
+  "category": "Study"
+}
+```
 
-Disadvantages:
+The response is illustrative; the final fields should follow the actual API design.
 
-* Repeated reads increase database load.
-* Response times may rise as traffic grows.
+## 8. Architectural Trade-Offs
 
-Caching may improve performance for suitable workloads, but cached data can become stale. Cache invalidation and consistency must be designed carefully.
+### 8.1 Caching vs. Consistency
 
-### 7.5 SQL Database vs. Local Browser Storage
+**Choice:** Cache suitable frequently accessed note-query results.
 
-Local browser storage can be useful for a prototype or offline feature, but it is not a substitute for shared, server-side persistence in a multi-user application.
+**Advantages:**
 
-A backend with a database provides centralized storage, controlled access, and a clearer path to backups and recovery. It also introduces infrastructure and operational responsibilities.
+* Reduces repeated database reads.
+* Can improve response times.
+* Can lower database resource consumption.
 
-## 8. Single Points of Failure
+**Disadvantages:**
 
-A single point of failure (SPOF) is a component whose failure can cause the entire system, or a critical part of it, to become unavailable.
+* Cached results may be stale.
+* Cache invalidation introduces complexity.
+* A cache outage can increase database load.
 
-### 8.1 Backend API
+**Mitigation:** Set expiration policies, invalidate affected entries after writes, use user-scoped cache keys, and fall back to the database when the cache is unavailable. Operations that require the latest committed data should use the primary database or an equivalent consistency mechanism.
 
-**Risk:** If only one backend instance runs and it crashes, users cannot create, retrieve, update, or delete notes through the API.
+### 8.2 Read Replicas vs. Strong Read Consistency
 
-**Mitigation:**
+**Choice:** Direct suitable read-heavy queries to a read replica.
 
-* Run multiple backend instances for higher availability.
-* Use health checks and a load balancer.
-* Configure automatic restarts where appropriate.
-* Monitor application errors and availability.
+**Advantages:**
 
-### 8.2 Database
+* Offloads the primary database.
+* Can increase read capacity.
+* Separates some read traffic from the main write workload.
 
-**Risk:** If the only database becomes unavailable, most note operations will fail. If its data is lost, users may lose saved notes.
+**Disadvantages:**
 
-**Mitigation:**
+* Replication lag can cause stale reads.
+* Replicas require monitoring and additional infrastructure.
+* Replication does not by itself provide complete writer failover.
 
-* Schedule and monitor backups.
-* Test restoration regularly.
-* Use database replication or managed high-availability options when justified.
-* Monitor disk capacity, connection limits, and database health.
+**Mitigation:** Send consistency-sensitive reads to the primary, monitor replica lag, and configure a tested procedure for promoting a replica or standby when the primary fails.
 
-Replication improves availability but does not replace backups, because accidental deletions or corrupted data may also be replicated.
+### 8.3 Multiple Application Servers vs. One Server
 
-### 8.3 Network and Hosting Infrastructure
+**Choice:** Run multiple application-server instances behind a load balancer.
 
-**Risk:** A network outage or failure of the hosting environment can prevent users from reaching the application.
+**Advantages:**
 
-**Mitigation:**
+* A single server failure does not necessarily interrupt the service.
+* Traffic can be distributed across available instances.
+* Additional instances can be added when demand increases.
 
-* Use reliable hosting and network monitoring.
-* Document recovery procedures.
-* Consider redundant infrastructure when the application's availability requirements justify the cost.
+**Disadvantages:**
 
-### 8.4 DNS and Load Balancer
+* Infrastructure and monitoring become more complex.
+* Shared state must not depend exclusively on one instance.
+* Load balancing and health checks require correct configuration.
 
-**Risk:** If all traffic depends on one DNS provider or one unprotected load-balancing component, its failure can prevent access even when the application servers are healthy.
+**Mitigation:** Distribute instances across failure domains, keep application servers stateless where possible, use shared services for persistent data, and test instance-failure scenarios.
 
-**Mitigation:**
+### 8.4 Asynchronous Queue vs. Synchronous Processing
 
-* Choose suitable managed services.
-* Configure health checks and failover where supported.
-* Review provider availability guarantees and recovery options.
+**Choice:** Use the queue for work that does not need to finish before responding to the user.
 
-### 8.5 Authentication Provider
+**Advantages:**
 
-**Risk:** If authentication depends entirely on an external identity provider, an outage may prevent users from signing in.
+* Prevents background tasks from unnecessarily delaying API responses.
+* Allows temporary processing backlogs to be managed independently.
+* Supports retries for transient failures.
 
-**Mitigation:**
+**Disadvantages:**
 
-* Monitor authentication failures.
-* Design appropriate session handling.
-* Document recovery procedures and provider dependencies.
-* Do not weaken authorization checks as a workaround for an authentication outage.
+* Background results may not be available immediately.
+* Queue and worker infrastructure introduce new operational dependencies.
+* Retried jobs can execute more than once.
 
-### 8.6 Prioritizing Reliability
+**Mitigation:** Use durable queue storage, multiple workers, retries with limits, idempotent job handling, monitoring, and a dead-letter queue.
 
-For the initial QuickNotes deployment, the most important priorities are:
+## 9. Single Points of Failure and Their Mitigation
 
-1. Protect note data with reliable backups.
-2. Monitor backend and database health.
-3. Handle API and database errors gracefully.
-4. Test restoring data from backups.
-5. Add redundancy when actual availability needs justify the additional complexity and cost.
+A single point of failure is a component whose failure can interrupt an essential part of the service.
 
-## 9. Security and Data Protection
+### 9.1 DNS
 
-The architecture should follow these practices:
+**Risk:** An outage in the DNS service could prevent clients from resolving the application's domain.
 
-* Use HTTPS in deployed environments.
-* Validate inputs on the backend.
-* Use parameterized database queries.
-* Enforce authentication and authorization for private notes.
-* Store secrets in environment variables or an appropriate secrets manager.
-* Avoid logging passwords, tokens, or unnecessary private note contents.
-* Apply sensible request-size limits and rate limits.
-* Keep dependencies updated.
-* Back up data securely and restrict access to backups.
+**Mitigation:** Use a reliable DNS provider with redundant infrastructure and monitoring. For services requiring stronger resilience against provider-level outages, consider multi-provider DNS with a tested failover configuration.
 
-Authentication and authorization are requirements for a multi-user production deployment; they should not be considered implemented until the relevant code and configuration exist.
+### 9.2 CDN
 
-## 10. Conclusion
+**Risk:** A CDN outage could prevent clients from receiving static frontend assets through that CDN.
 
-The proposed QuickNotes architecture separates the frontend, backend API, and relational database. This separation supports maintainability, data integrity, and future growth without introducing unnecessary complexity at the beginning.
+**Mitigation:** Keep the API endpoint independently reachable through its API hostname and load balancer. For stronger frontend resilience, configure an origin fallback or another tested delivery route.
 
-A single backend instance and database may be reasonable for a small initial deployment, but they create potential single points of failure. Monitoring, secure backups, recovery testing, and appropriate redundancy should be introduced according to the application's actual usage and reliability requirements.
+### 9.3 Load Balancer
 
-The capacity figures in this document are planning assumptions. Load testing and production monitoring should be used to validate them as the system develops.
+**Risk:** A single unprotected load-balancing instance could prevent API traffic from reaching otherwise healthy application servers.
+
+**Mitigation:** Use a managed or redundant load-balancing service spanning appropriate failure domains, with health checks and failover.
+
+### 9.4 Application Servers
+
+**Risk:** An individual application-server failure interrupts requests assigned to that instance.
+
+**Mitigation:** Maintain at least two application-server instances across separate failure domains. Use health checks so failed instances are removed from service, and keep application state in shared services rather than local instance memory.
+
+### 9.5 Cache
+
+**Risk:** A cache outage may increase latency and send a large volume of additional traffic to the database.
+
+**Mitigation:** Use a cache cluster or replicated service where justified. Make the API capable of falling back to database reads, and monitor database capacity so cache failure does not cause cascading overload.
+
+### 9.6 Primary Database
+
+**Risk:** The primary database is a critical dependency for writes. A read replica alone does not ensure automatic or lossless writer failover.
+
+**Mitigation:** Configure a suitable high-availability database deployment with a documented and tested promotion procedure, health checks, backups, and point-in-time recovery where supported. Use appropriate replication guarantees for the required recovery-point objective.
+
+Asynchronous replication may lose recent changes if the primary fails before they reach the replica. The recovery design must acknowledge this risk rather than assuming that a replica automatically eliminates it.
+
+### 9.7 Queue
+
+**Risk:** An unavailable queue can block background processing and cause jobs to accumulate in the application if they are not handled safely.
+
+**Mitigation:** Use durable replicated queue infrastructure, bounded producer retries, monitoring, and a recovery policy. Where necessary, use an outbox to retain jobs until they can be published successfully.
+
+### 9.8 Workers
+
+**Risk:** If a single worker fails, background tasks may stop processing.
+
+**Mitigation:** Run multiple workers, use queue-based retry mechanisms, monitor processing delays, and route repeatedly failing jobs to a dead-letter queue for investigation.
+
+### 9.9 Common Failure-Domain Risks
+
+Redundancy is ineffective when every replica depends on the same vulnerable machine, zone, credential, or network path.
+
+Application instances and critical supporting infrastructure should be spread across suitable failure domains where the deployment platform supports it. Backups should be protected against accidental deletion and tested through restoration exercises.
+
+No architecture can guarantee that every provider-level or regional outage will have zero impact. The objective is to reduce the likelihood and duration of outages and to make data recovery predictable.
+
+## 10. Reliability and Monitoring
+
+The system should monitor:
+
+* API request volume, latency, and error rates.
+* Application-server health and resource utilization.
+* Cache availability and hit rate.
+* Primary database health and replica lag.
+* Queue depth, failed jobs, and worker processing time.
+* Backup completion and restoration readiness.
+
+Alerts should identify failures before they cause prolonged disruption. Recovery procedures should be documented and tested rather than assumed to work.
+
+Availability targets and recovery objectives should be selected based on business requirements and validated against the actual hosting platform.
+
+## 11. Conclusion
+
+The proposed QuickNotes architecture combines a CDN, load balancer, multiple application servers, a cache, a primary database, a read replica, and a durable queue with workers.
+
+Under the stated assumptions, one million registered users generate an estimated average of approximately 23 reads per second and 2.3 writes per second, with planning peaks of roughly 116 reads per second and 12 writes per second. Estimated annual growth in raw note payload is 146 GB, or approximately 190 GB when allowing 30% for database metadata and indexes.
+
+These figures must be validated through workload testing and monitoring. Redundant application instances, controlled cache fallback, database failover, durable background processing, backups, and recovery testing reduce critical dependencies and make the system more resilient as it grows.
